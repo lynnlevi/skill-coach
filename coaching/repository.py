@@ -24,8 +24,6 @@ class Repository:
                 # Serialize first startup across deployment workers.
                 conn.execute(text("SELECT pg_advisory_xact_lock(839173041)"))
             metadata.create_all(conn)
-            if not conn.scalar(select(func.count()).select_from(questions)):
-                conn.execute(insert(questions), [{"text": q, "category": c} for q, c in QUESTION_BANK])
             if not conn.scalar(select(func.count()).select_from(users)) and settings.admin_password:
                 self._insert_user(conn, settings.admin_username, settings.admin_password, settings.admin_name, "admin")
 
@@ -38,6 +36,8 @@ class Repository:
             username=username, password_hash=hash_password(password), name=name.strip(), role=role,
         )).inserted_primary_key[0]
         conn.execute(insert(configs).values(user_id=user_id, updated_by=user_id, **deepcopy(DEFAULT_CONFIG)))
+        # Each learner starts with their own private copy of the starter bank.
+        conn.execute(insert(questions), [{"user_id": user_id, "text": q, "category": c} for q, c in QUESTION_BANK])
         return user_id
 
     @staticmethod
@@ -148,21 +148,22 @@ class Repository:
                 **config, updated_at=utcnow(), updated_by=principal.user_id,
             ))
 
-    def list_questions(self, principal):
+    def list_questions(self, principal, user_id):
         with self.engine.connect() as conn:
-            self._authorize(conn, principal)
-            return [dict(r) for r in conn.execute(select(questions).where(questions.c.active.is_(True))
-                                                .order_by(questions.c.id)).mappings()]
+            self._authorize(conn, principal, user_id)
+            return [dict(r) for r in conn.execute(select(questions).where(
+                questions.c.user_id == user_id, questions.c.active.is_(True),
+            ).order_by(questions.c.id)).mappings()]
 
-    def add_question(self, principal, question, category):
+    def add_question(self, principal, user_id, question, category):
         if not 5 <= len(question.strip()) <= 2000 or not 1 <= len(category.strip()) <= 100:
             raise ValueError("Enter a question of 5–2,000 characters and a category of 1–100 characters.")
         try:
             with self.engine.begin() as conn:
-                self._authorize(conn, principal, admin=True)
-                conn.execute(insert(questions).values(text=question.strip(), category=category.strip()))
+                self._authorize(conn, principal, user_id, admin=True)
+                conn.execute(insert(questions).values(user_id=user_id, text=question.strip(), category=category.strip()))
         except IntegrityError:
-            raise ValueError("That question is already in the bank.") from None
+            raise ValueError("That question is already in this workspace's bank.") from None
 
     def list_attempts(self, principal, user_id, limit=None, completed_only=False):
         with self.engine.connect() as conn:
@@ -199,7 +200,11 @@ class Repository:
                     if existing["user_id"] != user_id or existing["created_by"] != principal.user_id:
                         raise AccessDenied("This submission is unavailable.")
                     return existing["id"]
-                question = conn.execute(select(questions).where(questions.c.id == question_id)).mappings().one()
+                question = conn.execute(select(questions).where(
+                    questions.c.id == question_id, questions.c.user_id == user_id,
+                )).mappings().first()
+                if not question:
+                    raise AccessDenied("This question is unavailable in this workspace.")
                 return conn.execute(insert(attempts).values(
                     submission_id=submission_id, user_id=user_id, created_by=principal.user_id,
                     question_id=question_id, question_text=question["text"], answer=answer,

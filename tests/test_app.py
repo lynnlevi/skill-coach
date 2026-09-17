@@ -67,6 +67,39 @@ def test_admin_creates_and_opens_learner_then_typed_practice(app, monkeypatch, e
     assert not any(b.label == "Coach dashboard" for b in at.button)
 
 
+def test_admin_generates_and_adds_ai_question_for_specific_learner(app, monkeypatch):
+    at, repo = app
+    admin = repo.authenticate("coach_admin", PASSWORD)
+    uid = repo.create_user(admin, "learner", PASSWORD, "Learner")
+    other_uid = repo.create_user(admin, "other", PASSWORD, "Other")
+    draft = {"text": "A generated scenario question?", "category": "Generated",
+             "rationale": "Targets the pattern you described."}
+    calls = {"generate": 0}
+
+    def generate_question(self, config, prompt, existing_bank):
+        calls["generate"] += 1
+        return draft
+
+    monkeypatch.setattr(CoachAI, "generate_question", generate_question)
+    log_in(at)
+    at.text_area(key=f"gen_prompt_{uid}").set_value(
+        "A scenario about status updates that hide a real concern.").run()
+    at.button(key=f"generate_submit_{uid}").click().run()
+    assert calls["generate"] == 1
+    at.button(key=f"accept_{uid}").click().run()
+    bank = repo.list_questions(admin, uid)
+    assert len(bank) == 11
+    assert any(q["text"] == draft["text"] and q["category"] == draft["category"] for q in bank)
+    assert len(repo.list_questions(admin, other_uid)) == 10  # Not leaked into the other learner's bank.
+
+    at.text_area(key=f"gen_prompt_{uid}").set_value("Another prompt.").run()
+    at.button(key=f"generate_submit_{uid}").click().run()
+    assert calls["generate"] == 2
+    at.button(key=f"discard_{uid}").click().run()
+    assert len(repo.list_questions(admin, uid)) == 11
+    assert not at.exception
+
+
 def test_draft_survives_navigation_and_failed_answer_is_retryable(app, monkeypatch, evaluation):
     at, repo = app
     admin = repo.authenticate("coach_admin", PASSWORD)

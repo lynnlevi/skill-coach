@@ -3,15 +3,6 @@
 -- Defaults are supplied by the application, not SQL server defaults.
 
 
-CREATE TABLE questions (
-	id SERIAL NOT NULL, 
-	text TEXT NOT NULL, 
-	category VARCHAR(100) NOT NULL, 
-	active BOOLEAN NOT NULL, 
-	PRIMARY KEY (id), 
-	UNIQUE (text)
-);
-
 CREATE TABLE users (
 	id SERIAL NOT NULL, 
 	username VARCHAR(64) NOT NULL, 
@@ -27,6 +18,19 @@ CREATE TABLE users (
 	CONSTRAINT valid_role CHECK (role IN ('admin', 'user')), 
 	UNIQUE (username)
 );
+
+CREATE TABLE questions (
+	id SERIAL NOT NULL, 
+	user_id INTEGER NOT NULL, 
+	text TEXT NOT NULL, 
+	category VARCHAR(100) NOT NULL, 
+	active BOOLEAN NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(user_id) REFERENCES users (id), 
+	CONSTRAINT uq_questions_user_text UNIQUE (user_id, text)
+);
+
+CREATE INDEX ix_questions_user_active ON questions (user_id, active);
 
 CREATE TABLE practice_attempts (
 	id SERIAL NOT NULL, 

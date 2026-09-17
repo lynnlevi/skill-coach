@@ -4,7 +4,7 @@ from pathlib import Path
 
 from sqlalchemy import (
     MetaData, Table, Column, Integer, String, Text, Boolean, Float, DateTime,
-    JSON, ForeignKey, CheckConstraint, Index, create_engine, event,
+    JSON, ForeignKey, CheckConstraint, Index, UniqueConstraint, create_engine, event,
 )
 from sqlalchemy.engine import make_url
 
@@ -42,10 +42,13 @@ configs = Table(
 questions = Table(
     "questions", metadata,
     Column("id", Integer, primary_key=True),
-    Column("text", Text, nullable=False, unique=True),
+    Column("user_id", ForeignKey("users.id"), nullable=False),
+    Column("text", Text, nullable=False),
     Column("category", String(100), nullable=False),
     Column("active", Boolean, nullable=False, default=True),
+    UniqueConstraint("user_id", "text", name="uq_questions_user_text"),
 )
+Index("ix_questions_user_active", questions.c.user_id, questions.c.active)
 attempts = Table(
     "practice_attempts", metadata,
     Column("id", Integer, primary_key=True),

@@ -97,7 +97,7 @@ def login(repo):
     st.stop()
 
 
-def admin_page(repo, principal):
+def admin_page(repo, principal, settings):
     st.title("Coach dashboard")
     st.write("Manage learners and open their coaching spaces.")
     with st.expander("Create a learner account"):
@@ -132,14 +132,42 @@ def admin_page(repo, principal):
                         if user["id"] == principal.user_id:
                             logout()
                         st.success("Password changed. Existing sessions have been revoked.")
-    with st.expander("Add a practice question"):
-        st.caption("Questions in the bank are available to every workspace.")
-        with st.form("add_question", clear_on_submit=True):
-            question = st.text_area("Question", max_chars=2000)
-            category = st.text_input("Category", max_chars=100)
-            if st.form_submit_button("Add question"):
-                repo.add_question(principal, question, category)
-                st.success("Question added to the bank.")
+            with st.expander("Add a practice question"):
+                st.caption(f"Added only to {user['name']}'s own bank.")
+                write_tab, ai_tab = st.tabs(["Write it yourself", "Generate with AI"])
+                with write_tab:
+                    with st.form(f"add_question_{user['id']}", clear_on_submit=True):
+                        question = st.text_area("Question", max_chars=2000, key=f"question_{user['id']}")
+                        category = st.text_input("Category", max_chars=100, key=f"category_{user['id']}")
+                        if st.form_submit_button("Add question"):
+                            repo.add_question(principal, user["id"], question, category)
+                            st.success(f"Question added to {user['name']}'s bank.")
+                with ai_tab:
+                    draft_key = f"question_draft_{user['id']}"
+                    with st.form(f"generate_question_{user['id']}"):
+                        prompt = st.text_area(
+                            "What kind of question do you want?", max_chars=2000, key=f"gen_prompt_{user['id']}",
+                            help="Describe the scenario or pattern you want this question to test for.",
+                        )
+                        if st.form_submit_button("Generate with AI", key=f"generate_submit_{user['id']}") and prompt.strip():
+                            config = validate_config(repo.get_config(principal, user["id"]))
+                            bank = repo.list_questions(principal, user["id"])
+                            with st.spinner("Drafting a question…"):
+                                st.session_state[draft_key] = CoachAI(settings).generate_question(config, prompt, bank)
+                    draft = st.session_state.get(draft_key)
+                    if draft:
+                        st.caption(draft["category"])
+                        st.write(draft["text"])
+                        st.caption(draft["rationale"])
+                        accept, discard = st.columns(2)
+                        if accept.button("Add to bank", key=f"accept_{user['id']}", type="primary", width="stretch"):
+                            repo.add_question(principal, user["id"], draft["text"], draft["category"])
+                            del st.session_state[draft_key]
+                            st.success(f"Question added to {user['name']}'s bank.")
+                            st.rerun()
+                        if discard.button("Discard", key=f"discard_{user['id']}", width="stretch"):
+                            del st.session_state[draft_key]
+                            st.rerun()
 
 
 def new_draft(question, config, reason=""):
@@ -155,7 +183,7 @@ def remember_answer(key):
 def practice(repo, principal, user_id, settings):
     st.title("Practice")
     config = repo.get_config(principal, user_id)
-    bank = repo.list_questions(principal)
+    bank = repo.list_questions(principal, user_id)
     history = repo.list_attempts(principal, user_id, limit=10)
     if "draft" not in st.session_state:
         recent_ids = {a["question_id"] for a in history}
@@ -360,7 +388,7 @@ def main():
                 clear_workspace()
                 st.rerun()
     if actor["role"] == "admin" and st.session_state.get("admin_page", True):
-        admin_page(repo, principal)
+        admin_page(repo, principal, settings)
         return
     user_id = st.session_state.get("workspace_id", actor["id"]) if actor["role"] == "admin" else actor["id"]
     workspace = repo.workspace_user(principal, user_id)

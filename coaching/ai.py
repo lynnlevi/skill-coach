@@ -5,7 +5,7 @@ import json
 from openai import OpenAI, APIConnectionError, APITimeoutError, RateLimitError, AuthenticationError, APIStatusError
 from pydantic import ValidationError
 
-from .domain import Evaluation, QuestionChoice, TrendAnalysis, score_evaluation, MAX_AUDIO_BYTES
+from .domain import Evaluation, QuestionChoice, GeneratedQuestion, TrendAnalysis, score_evaluation, MAX_AUDIO_BYTES
 
 
 class AIError(Exception):
@@ -62,6 +62,24 @@ class CoachAI:
         if not selected:
             raise AIError("The model selected a question outside the bank. Please retry.")
         return selected, choice.reason
+
+    def generate_question(self, config, prompt, existing_bank=None):
+        prompt = prompt.strip()
+        if not prompt or len(prompt) > 2000:
+            raise AIError("Describe what kind of question you want in 1–2,000 characters.")
+        result = self._structured(GeneratedQuestion,
+            "Draft exactly one new practice question for this learner, based on the coach's request. "
+            "Fit the learner's training goal, context, and coaching instructions. The question should read as "
+            "a natural scenario or prompt a person could actually be asked, not a meta-description of a skill. "
+            "Avoid duplicating the meaning of an existing question. Briefly explain why this question fits the "
+            "learner's profile and the coach's request.",
+            {"profile": config, "coach_request": prompt,
+             "existing_questions": [q["text"] for q in (existing_bank or [])]},
+        )
+        text, category = result.text.strip(), result.category.strip()
+        if not 5 <= len(text) <= 2000 or not 1 <= len(category) <= 100:
+            raise AIError("The generated question did not meet length limits. Please retry.")
+        return {"text": text, "category": category, "rationale": result.rationale.strip()}
 
     def transcribe(self, audio_bytes):
         if not audio_bytes or len(audio_bytes) > MAX_AUDIO_BYTES:

@@ -16,7 +16,8 @@ from conftest import PASSWORD
 
 
 def create_attempt(repo, actor, uid, submission_id=None, **kwargs):
-    return repo.create_attempt(actor, uid, submission_id or str(uuid4()), 1, "I chose the smaller project because it solved the main customer problem.",
+    question_id = repo.list_questions(actor, uid)[0]["id"]
+    return repo.create_attempt(actor, uid, submission_id or str(uuid4()), question_id, "I chose the smaller project because it solved the main customer problem.",
                                deepcopy(DEFAULT_CONFIG), "gpt-4.1-mini", **kwargs)
 
 
@@ -36,10 +37,27 @@ def test_bootstrap_is_idempotent_and_never_overwrites(repo):
     principal = repo.authenticate(" COACH_ADMIN ", PASSWORD)
     assert principal
     assert len(repo.list_users(principal)) == 1
-    assert len(repo.list_questions(principal)) == 10
+    assert len(repo.list_questions(principal, principal.user_id)) == 10
     assert repo.authenticate("coach_admin", "different-password-456") is None
     with repo.engine.connect() as conn:
         assert conn.scalar(select(users.c.password_hash)).startswith("$argon2id$")
+
+
+def test_questions_are_scoped_per_user(repo, accounts):
+    admin, alice, bob, alice_id, bob_id = accounts
+    assert len(repo.list_questions(alice, alice_id)) == 10
+    assert len(repo.list_questions(bob, bob_id)) == 10
+    repo.add_question(admin, alice_id, "How would you tell a stakeholder the timeline slipped?", "Influence")
+    alice_bank = repo.list_questions(alice, alice_id)
+    bob_bank = repo.list_questions(bob, bob_id)
+    assert len(alice_bank) == 11
+    assert len(bob_bank) == 10
+    added = next(q for q in alice_bank if q["text"] == "How would you tell a stakeholder the timeline slipped?")
+    assert all(q["id"] != added["id"] for q in bob_bank)
+    with pytest.raises(AccessDenied):
+        repo.create_attempt(bob, bob_id, str(uuid4()), added["id"], "An answer.", deepcopy(DEFAULT_CONFIG), "gpt-4.1-mini")
+    with pytest.raises(AccessDenied):
+        repo.add_question(alice, bob_id, "Alice should not be able to add to Bob's bank.", "Test")
 
 
 def test_lockout_is_saved_and_password_reset_revokes_session(repo, accounts):

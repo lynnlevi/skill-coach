@@ -5,7 +5,7 @@ A working Streamlit MVP for a coach and their learners. One app, one relational 
 ## What is included
 
 - Manual username/password login with salted **Argon2id** hashes, admin/user roles, session expiry, and account lockout after five failed logins (15 minutes).
-- Coach dashboard: create learners, disable/re-enable access, reset passwords, open any workspace, and add questions to the shared bank.
+- Coach dashboard: create learners, disable/re-enable access, reset passwords, open any workspace, and add practice questions to a specific learner's own bank — written by hand or drafted by AI from a short prompt and reviewed before saving.
 - **Practice:** one question at a time; type or record with `st.audio_input`; explicitly transcribe; review/edit the transcript; explicitly submit for structured evaluation.
 - **Progress:** chronological question/answer/evaluation history, scores, original transcripts, rubric snapshots, retry buttons, history download, and saved pattern/trend analyses.
 - **Configuration:** training goal, context, weighted rubric, and coaching instructions, editable by both learner and coach.
@@ -57,11 +57,11 @@ Without an OpenAI key, login, user management, configuration, the question bank,
 
 1. Log in as coach and choose **Create a learner account**. Give the learner their username and initial password privately.
 2. Open the learner's workspace and set their **Configuration**. Rubric weights must add up to 100%.
-3. In **Practice**, answer the displayed question. **Next question** cycles through the bank; **Choose with AI** selects from the bank using the profile and recent feedback. Add domain-specific questions from the coach dashboard when needed.
+3. In **Practice**, answer the displayed question. **Next question** cycles through that learner's own bank; **Choose with AI** selects from it using the profile and recent feedback. Add domain-specific questions for that learner from the coach dashboard when needed.
 4. For voice: select **Record**, allow microphone access, record and stop, then click **Transcribe recording**. Review/correct the editable transcript. Click **Submit answer** separately.
 5. Read the evaluation or open **Progress**. After two completed evaluations, click **Generate and save analysis**.
 
-The first question is selected locally from the bank, avoiding the latest ten attempted questions where possible. Browsing does not trigger paid API calls. AI calls happen only when choosing with AI, transcribing, submitting/retrying evaluation, or generating an analysis.
+The first question is selected locally from the bank, avoiding the latest ten attempted questions where possible. Browsing does not trigger paid API calls. AI calls happen only when choosing with AI, generating a question draft, transcribing, submitting/retrying evaluation, or generating an analysis.
 
 ## Deploy to Streamlit Community Cloud with PostgreSQL
 
@@ -111,7 +111,7 @@ Tables:
 |---|---|
 | `users` | Unique normalized username, password hash, name, role, active flag, login lockout, session version |
 | `user_config` | Goal, context, rubric JSON, instructions, update timestamp/actor |
-| `questions` | Shared question bank with category and active flag |
+| `questions` | Each learner's own question bank (scoped by `user_id`), with category and active flag |
 | `practice_attempts` | Question snapshot, final answer, optional raw transcript, configuration snapshot, structured evaluation, status, model, timestamps, submitting actor |
 | `progress_analyses` | Saved structured analysis, exact source attempt IDs/date range, profile snapshot, model, creating actor |
 

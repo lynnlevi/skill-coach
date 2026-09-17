@@ -91,6 +91,12 @@ class QuestionChoice(StrictModel):
     reason: str
 
 
+class GeneratedQuestion(StrictModel):
+    text: str
+    category: str
+    rationale: str
+
+
 class TrendAnalysis(StrictModel):
     summary: str
     strengths: list[str]
