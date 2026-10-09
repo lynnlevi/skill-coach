@@ -57,7 +57,7 @@ Without an OpenAI key, login, user management, configuration, the question bank,
 
 1. Log in as coach and choose **Create a learner account**. Give the learner their username and initial password privately.
 2. Open the learner's workspace and set their **Configuration**. Rubric weights must add up to 100%.
-3. In **Practice**, answer the displayed question. **Next question** cycles through that learner's own bank; **Choose with AI** selects from it using the profile and recent feedback. Add domain-specific questions for that learner from the coach dashboard when needed.
+3. A learner's question bank starts empty; add at least one practice question for them from the coach dashboard before they can use **Practice** (write it by hand or draft it with AI from a short prompt). Once questions exist, **Next question** cycles through that learner's own bank and **Choose with AI** selects from it using the profile and recent feedback.
 4. For voice: select **Record**, allow microphone access, record and stop, then click **Transcribe recording**. Review/correct the editable transcript. Click **Submit answer** separately.
 5. Read the evaluation or open **Progress**. After two completed evaluations, click **Generate and save analysis**.
 
@@ -122,7 +122,7 @@ All foreign keys are enforced in SQLite as well as PostgreSQL. Timestamps are st
 - Each data operation checks the actor's active state, role, and session version against the database. Learners can only access their own rows. The coach can read/edit any workspace; a banner makes this explicit, and attempts record `created_by` so coach submissions are attributable.
 - Disabling or re-enabling a user and resetting their password revokes existing sessions. Disabled learners cannot log in; the coach can still open their saved workspace. Admin accounts cannot be disabled in the UI.
 - Login lasts for the Streamlit session, up to `SESSION_HOURS` (1–24, default 8). Reloading may require login again. Session state is cleared on logout and workspace switches. Revocation is checked on the next app interaction, including writes after API calls; it cannot erase content already displayed in a browser.
-- Argon2id provides per-password salts. Usernames are case-insensitive and passwords are 12–128 characters. There is no public self-registration, email reset, or persistent-login cookie. Users ask the coach for password resets.
+- Argon2id provides per-password salts. Usernames are case-insensitive and passwords are 6–128 characters. There is no public self-registration, email reset, or persistent-login cookie. Users ask the coach for password resets.
 - A database-backed lockout handles repeated failures for known accounts; a short session cooldown also covers unknown names. The app is an MVP for a coach-managed audience, not a full identity service with MFA or distributed IP-based abuse controls.
 - The answer and frozen configuration are committed **before** evaluation. Failures remain in Progress, and retry uses the same saved answer/rubric/model. A unique submission ID prevents duplicate attempts on reruns. An atomic, three-minute evaluation lease prevents simultaneous retries; expired leases can be retried. This is on-demand retry, not a background queue. A crash after a provider response but before saving may require another paid API call.
 - A question holds its configuration snapshot. Configuration changes apply to the next question. Drafts survive page navigation in the current session; a browser/session restart may discard an **unsubmitted** draft.

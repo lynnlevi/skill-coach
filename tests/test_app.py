@@ -37,6 +37,16 @@ def log_in(at, username="coach_admin", password=PASSWORD):
     click(at, "Log in")
 
 
+def test_practice_shows_message_when_bank_is_empty(app):
+    at, repo = app
+    admin = repo.authenticate("coach_admin", PASSWORD)
+    repo.create_user(admin, "empty", PASSWORD, "Empty")
+    log_in(at, "empty")
+    assert not at.exception
+    assert any("No practice questions yet" in item.value for item in at.info)
+    assert not any(t.label == "Your answer / editable transcript" for t in at.text_area)
+
+
 def test_admin_creates_and_opens_learner_then_typed_practice(app, monkeypatch, evaluation):
     at, repo = app
     monkeypatch.setattr(CoachAI, "evaluate", lambda self, attempt: evaluation)
@@ -47,6 +57,7 @@ def test_admin_creates_and_opens_learner_then_typed_practice(app, monkeypatch, e
     click(at, "Create account")
     principal = repo.authenticate("coach_admin", PASSWORD)
     alice = next(u for u in repo.list_users(principal) if u["username"] == "alice")
+    repo.add_question(principal, alice["id"], "Tell me about a project that did not go to plan.", "Reflection")
     at.button(key=f"open_{alice['id']}").click().run()
     assert not at.exception
     assert any("Coach view" in item.value for item in at.info)
@@ -88,15 +99,15 @@ def test_admin_generates_and_adds_ai_question_for_specific_learner(app, monkeypa
     assert calls["generate"] == 1
     at.button(key=f"accept_{uid}").click().run()
     bank = repo.list_questions(admin, uid)
-    assert len(bank) == 11
+    assert len(bank) == 1
     assert any(q["text"] == draft["text"] and q["category"] == draft["category"] for q in bank)
-    assert len(repo.list_questions(admin, other_uid)) == 10  # Not leaked into the other learner's bank.
+    assert len(repo.list_questions(admin, other_uid)) == 0  # Not leaked into the other learner's bank.
 
     at.text_area(key=f"gen_prompt_{uid}").set_value("Another prompt.").run()
     at.button(key=f"generate_submit_{uid}").click().run()
     assert calls["generate"] == 2
     at.button(key=f"discard_{uid}").click().run()
-    assert len(repo.list_questions(admin, uid)) == 11
+    assert len(repo.list_questions(admin, uid)) == 1
     assert not at.exception
 
 
@@ -104,6 +115,7 @@ def test_draft_survives_navigation_and_failed_answer_is_retryable(app, monkeypat
     at, repo = app
     admin = repo.authenticate("coach_admin", PASSWORD)
     uid = repo.create_user(admin, "learner", PASSWORD, "Learner")
+    repo.add_question(admin, uid, "Tell me about a project that did not go to plan.", "Reflection")
     log_in(at, "learner")
     next(t for t in at.text_area if t.label == "Your answer / editable transcript").set_value("A carefully written answer.").run()
     at.radio(key="page").set_value("Progress").run()
@@ -131,6 +143,7 @@ def test_missing_key_keeps_app_usable_and_shows_saved_failure(app, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "")
     admin = repo.authenticate("coach_admin", PASSWORD)
     uid = repo.create_user(admin, "learner", PASSWORD, "Learner")
+    repo.add_question(admin, uid, "Tell me about a project that did not go to plan.", "Reflection")
     log_in(at, "learner")
     next(t for t in at.text_area if t.label == "Your answer / editable transcript").set_value("Saved without an API key.").run()
     click(at, "Submit answer")
@@ -143,6 +156,7 @@ def test_transcript_review_is_separate_and_final_edit_is_saved(app, monkeypatch,
     at, repo = app
     admin = repo.authenticate("coach_admin", PASSWORD)
     uid = repo.create_user(admin, "speaker", PASSWORD, "Speaker")
+    repo.add_question(admin, uid, "Tell me about a project that did not go to plan.", "Reflection")
     audio = io.BytesIO(b"RIFF-test-recording")
     audio.size = len(audio.getvalue())
     # AppTest does not expose browser microphone capture; substitute only the native
@@ -185,6 +199,8 @@ def test_progress_chart_and_analysis_are_saved_once_per_click(app, monkeypatch, 
     at, repo = app
     admin = repo.authenticate("coach_admin", PASSWORD)
     uid = repo.create_user(admin, "learner", PASSWORD, "Learner")
+    repo.add_question(admin, uid, "Tell me about a project that did not go to plan.", "Reflection")
+    repo.add_question(admin, uid, "Describe a time you disagreed with a colleague.", "Collaboration")
     monkeypatch.setattr(CoachAI, "evaluate", lambda *args: evaluation)
     analysis = {"summary": "Your openings are clear.", "strengths": ["Clear opening"],
                 "recurring_weaknesses": ["Limited evidence"], "trends": ["Similar scores across two attempts"],

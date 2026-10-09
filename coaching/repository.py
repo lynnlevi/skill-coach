@@ -7,7 +7,7 @@ from sqlalchemy import select, insert, update, func, or_, and_, text
 from sqlalchemy.exc import IntegrityError
 
 from .db import metadata, users, configs, questions, attempts, analyses, utcnow
-from .domain import DEFAULT_CONFIG, QUESTION_BANK, PROMPT_VERSION, MAX_ANSWER_CHARS, validate_config
+from .domain import DEFAULT_CONFIG, PROMPT_VERSION, MAX_ANSWER_CHARS, validate_config
 from .security import (
     Principal, AccessDenied, hash_password, verify_password,
     validate_username, normalize_username, hasher,
@@ -36,8 +36,6 @@ class Repository:
             username=username, password_hash=hash_password(password), name=name.strip(), role=role,
         )).inserted_primary_key[0]
         conn.execute(insert(configs).values(user_id=user_id, updated_by=user_id, **deepcopy(DEFAULT_CONFIG)))
-        # Each learner starts with their own private copy of the starter bank.
-        conn.execute(insert(questions), [{"user_id": user_id, "text": q, "category": c} for q, c in QUESTION_BANK])
         return user_id
 
     @staticmethod

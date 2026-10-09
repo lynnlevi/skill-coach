@@ -105,7 +105,7 @@ def admin_page(repo, principal, settings):
             name = st.text_input("Name", max_chars=120)
             username = st.text_input("New username", max_chars=64)
             password = st.text_input("Initial password", type="password", max_chars=128,
-                                     help="Use a unique password of at least 12 characters.")
+                                     help="Use a unique password of at least 6 characters.")
             if st.form_submit_button("Create account", type="primary"):
                 repo.create_user(principal, username, password, name)
                 st.success("Account created. Share the username and password with the learner privately.")
@@ -184,6 +184,9 @@ def practice(repo, principal, user_id, settings):
     st.title("Practice")
     config = repo.get_config(principal, user_id)
     bank = repo.list_questions(principal, user_id)
+    if not bank:
+        st.info("No practice questions yet in this workspace. Ask your coach to add one from the coach dashboard.")
+        st.stop()
     history = repo.list_attempts(principal, user_id, limit=10)
     if "draft" not in st.session_state:
         recent_ids = {a["question_id"] for a in history}

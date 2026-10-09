@@ -30,8 +30,8 @@ def validate_username(username: str) -> str:
 
 
 def hash_password(password: str) -> str:
-    if not 12 <= len(password) <= 128:
-        raise ValueError("Passwords must be 12–128 characters long.")
+    if not 6 <= len(password) <= 128:
+        raise ValueError("Passwords must be 6–128 characters long.")
     return hasher.hash(password)
 
 
