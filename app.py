@@ -185,8 +185,17 @@ def practice(repo, principal, user_id, settings):
     config = repo.get_config(principal, user_id)
     bank = repo.list_questions(principal, user_id)
     if not bank:
-        st.info("No practice questions yet in this workspace. Ask your coach to add one from the coach dashboard.")
-        st.stop()
+        # Only this page has nothing to show; the rest of the workspace stays usable.
+        st.caption(f"Training goal: {config['training_goal']}")
+        with st.container(border=True):
+            st.subheader("No practice questions yet")
+            if principal.user_id != user_id:
+                st.write("Add the first question from the coach dashboard, under "
+                         "**Add a practice question** on this learner's card.")
+            else:
+                st.write("Your coach hasn't added any questions yet. Ask them to add the first one.")
+        st.caption("Progress and Configuration are available in the sidebar.")
+        return
     history = repo.list_attempts(principal, user_id, limit=10)
     if "draft" not in st.session_state:
         recent_ids = {a["question_id"] for a in history}

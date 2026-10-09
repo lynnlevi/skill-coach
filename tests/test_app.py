@@ -37,14 +37,23 @@ def log_in(at, username="coach_admin", password=PASSWORD):
     click(at, "Log in")
 
 
-def test_practice_shows_message_when_bank_is_empty(app):
+def test_empty_bank_leaves_rest_of_workspace_usable(app):
     at, repo = app
     admin = repo.authenticate("coach_admin", PASSWORD)
-    repo.create_user(admin, "empty", PASSWORD, "Empty")
+    uid = repo.create_user(admin, "empty", PASSWORD, "Empty")
     log_in(at, "empty")
     assert not at.exception
-    assert any("No practice questions yet" in item.value for item in at.info)
+    assert any("No practice questions yet" in h.value for h in at.subheader)
     assert not any(t.label == "Your answer / editable transcript" for t in at.text_area)
+    # The other pages must still be reachable and editable.
+    at.radio(key="page").set_value("Configuration").run()
+    assert not at.exception
+    goal = next(t for t in at.text_area if t.label == "Training goal")
+    goal.set_value("Speak with clarity under pressure").run()
+    click(at, "Save configuration")
+    assert repo.get_config(admin, uid)["training_goal"] == "Speak with clarity under pressure"
+    at.radio(key="page").set_value("Progress").run()
+    assert not at.exception
 
 
 def test_admin_creates_and_opens_learner_then_typed_practice(app, monkeypatch, evaluation):
