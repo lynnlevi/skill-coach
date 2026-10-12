@@ -26,6 +26,8 @@ users = Table(
     Column("session_version", Integer, nullable=False, default=1),
     Column("failed_logins", Integer, nullable=False, default=0),
     Column("locked_until", Float, nullable=False, default=0),
+    # When true, the coach must review and release feedback before the learner sees it.
+    Column("review_required", Boolean, nullable=False, default=False),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     CheckConstraint("role IN ('admin', 'user')", name="valid_role"),
 )
@@ -64,6 +66,12 @@ attempts = Table(
     Column("config_snapshot", JSON, nullable=False),
     Column("evaluation", JSON),
     Column("overall_score", Float),
+    # The coach's edited copy of the evaluation. The AI's original above is never overwritten.
+    Column("released_evaluation", JSON),
+    Column("released_score", Float),
+    Column("coach_note", Text),
+    Column("released_at", DateTime(timezone=True)),
+    Column("released_by", ForeignKey("users.id")),
     Column("status", String(16), nullable=False, default="pending"),
     Column("error_message", Text),
     Column("evaluation_lease_until", Float, nullable=False, default=0),
@@ -75,6 +83,7 @@ attempts = Table(
     CheckConstraint("status IN ('pending', 'evaluating', 'failed', 'completed')", name="valid_attempt_status"),
     CheckConstraint("answer_source IN ('typed', 'audio')", name="valid_answer_source"),
     CheckConstraint("overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 10)", name="valid_score"),
+    CheckConstraint("released_score IS NULL OR (released_score >= 0 AND released_score <= 10)", name="valid_released_score"),
 )
 Index("ix_attempts_user_time", attempts.c.user_id, attempts.c.created_at)
 analyses = Table(

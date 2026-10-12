@@ -6,6 +6,7 @@ A working Streamlit MVP for a coach and their learners. One app, one relational 
 
 - Manual username/password login with salted **Argon2id** hashes, admin/user roles, session expiry, and account lockout after five failed logins (15 minutes).
 - Coach dashboard: create learners, disable/re-enable access, reset passwords, open any workspace, and add practice questions to a specific learner's own bank — written by hand or drafted by AI from a short prompt and reviewed before saving.
+- Optional coach review per learner: when it is on, the AI's evaluation stays hidden until the coach edits it, adds a note, and releases it. The AI's original is kept unchanged for comparison.
 - **Practice:** one question at a time; type or record with `st.audio_input`; explicitly transcribe; review/edit the transcript; explicitly submit for structured evaluation.
 - **Progress:** chronological question/answer/evaluation history, scores, original transcripts, rubric snapshots, retry buttons, history download, and saved pattern/trend analyses.
 - **Configuration:** training goal, context, weighted rubric, and coaching instructions, editable by both learner and coach.
@@ -112,10 +113,11 @@ Tables:
 | `users` | Unique normalized username, password hash, name, role, active flag, login lockout, session version |
 | `user_config` | Goal, context, rubric JSON, instructions, update timestamp/actor |
 | `questions` | Each learner's own question bank (scoped by `user_id`), with category and active flag |
+| `practice_attempts.released_*` | The coach's edited evaluation, note, and release timestamp; the learner sees feedback only once `released_at` is set, or immediately when the learner's `review_required` is off |
 | `practice_attempts` | Question snapshot, final answer, optional raw transcript, configuration snapshot, structured evaluation, status, model, timestamps, submitting actor |
 | `progress_analyses` | Saved structured analysis, exact source attempt IDs/date range, profile snapshot, model, creating actor |
 
-All foreign keys are enforced in SQLite as well as PostgreSQL. Timestamps are stored/displayed as UTC. `coaching/db.py` is the authoritative executable schema. `schema.sql` is a review/reference artifact; use automatic initialization or `coaching.cli init` to initialize so application defaults and seeds are applied. Initialization creates missing tables; it does **not** migrate existing columns. Back up the database and add an explicit migration before changing a deployed schema.
+All foreign keys are enforced in SQLite as well as PostgreSQL. Timestamps are stored/displayed as UTC. `coaching/db.py` is the authoritative executable schema. `schema.sql` is a review/reference artifact; use automatic initialization or `coaching.cli init` to initialize so application defaults and seeds are applied. Initialization creates missing tables; it does **not** migrate existing columns. Column changes ship as one-off scripts in `migrations/`, to be run against a deployed database before the new code goes live. Back up the database and add an explicit migration before changing a deployed schema.
 
 ## Behavior and implementation choices
 

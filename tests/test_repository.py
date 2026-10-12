@@ -205,6 +205,80 @@ def test_analysis_saves_exact_source_and_rejects_other_workspace(repo, accounts,
         repo.save_analysis(bob, bob_id, ids, DEFAULT_CONFIG, {"summary": "invalid"}, "model")
 
 
+def _complete(repo, actor, uid, evaluation):
+    aid = create_attempt(repo, actor, uid)
+    token = repo.claim_evaluation(actor, uid, aid)
+    repo.finish_evaluation(actor, uid, aid, token, evaluation=evaluation)
+    return aid
+
+
+def test_feedback_is_immediate_when_the_gate_is_off(repo, accounts, evaluation):
+    _, alice, _, uid, _ = accounts
+    aid = _complete(repo, alice, uid, evaluation)
+    seen = repo.get_attempt(alice, uid, aid)
+    assert seen["visible_evaluation"]["summary"] == evaluation["summary"]
+    assert seen["visible_score"] == evaluation["overall_score"]
+    assert seen["awaiting_review"] is False
+
+
+def test_review_gate_hides_feedback_until_the_coach_releases_an_edit(repo, accounts, evaluation):
+    admin, alice, _, uid, _ = accounts
+    repo.set_review_required(admin, uid, True)
+    aid = _complete(repo, alice, uid, evaluation)
+
+    hidden = repo.get_attempt(alice, uid, aid)
+    assert hidden["visible_evaluation"] is None and hidden["visible_score"] is None
+    assert hidden["awaiting_review"] is True
+    # Unreleased feedback never reaches the learner's row at all.
+    assert hidden["evaluation"] is None and hidden["overall_score"] is None
+    assert repo.get_attempt(admin, uid, aid)["evaluation"]["summary"] == evaluation["summary"]
+
+    edited = {
+        "summary": "Clearer than last time, but the outcome is still missing.",
+        "dimension_scores": [{"name": r["name"], "score": 6, "feedback": "Reviewed by the coach."}
+                             for r in DEFAULT_CONFIG["rubric"]],
+        "strengths": ["Direct opening"],
+        "improvements": ["Name the measurable result"],
+        "suggested_approach": "Decision, reason, evidence, outcome.",
+        "tags": ["communication"],
+    }
+
+    repo.save_review(admin, uid, aid, edited, "Not ready yet.", release=False)
+    assert repo.get_attempt(alice, uid, aid)["visible_evaluation"] is None, "a draft must stay hidden"
+
+    repo.save_review(admin, uid, aid, edited, "Watch how you close next time.", release=True)
+    seen = repo.get_attempt(alice, uid, aid)
+    assert seen["visible_evaluation"]["summary"] == edited["summary"]
+    assert seen["visible_score"] == 6  # recomputed from the coach's scores and the rubric weights
+    assert seen["coach_note"] == "Watch how you close next time."
+    assert seen["awaiting_review"] is False
+    # The AI's original survives untouched for the coach.
+    assert repo.get_attempt(admin, uid, aid)["evaluation"]["summary"] == evaluation["summary"]
+
+
+def test_only_the_coach_can_review_or_change_the_gate(repo, accounts, evaluation):
+    admin, alice, bob, uid, bob_id = accounts
+    aid = _complete(repo, alice, uid, evaluation)
+    edited = {
+        "summary": "Clearer than last time, but the outcome is still missing.",
+        "dimension_scores": [{"name": r["name"], "score": 6, "feedback": "Reviewed by the coach."}
+                             for r in DEFAULT_CONFIG["rubric"]],
+        "strengths": ["Direct opening"],
+        "improvements": ["Name the measurable result"],
+        "suggested_approach": "Decision, reason, evidence, outcome.",
+        "tags": ["communication"],
+    }
+    for operation in [
+        lambda: repo.save_review(alice, uid, aid, edited, "", release=True),
+        lambda: repo.save_review(bob, uid, aid, edited, "", release=True),
+        lambda: repo.set_review_required(alice, uid, True),
+        lambda: repo.set_review_required(bob, bob_id, True),
+    ]:
+        with pytest.raises(AccessDenied):
+            operation()
+    assert repo.get_attempt(admin, uid, aid)["released_at"] is None
+
+
 @pytest.mark.parametrize("weights", [[30, 20, 20, 20, 1], [float('nan'), 20, 20, 20, 10], [0, 30, 30, 30, 10]])
 def test_rubric_rejects_invalid_weights(weights):
     config = deepcopy(DEFAULT_CONFIG)

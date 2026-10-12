@@ -70,6 +70,51 @@ def show_evaluation(evaluation):
     st.write(evaluation["suggested_approach"])
 
 
+def review_form(repo, principal, user_id, attempt):
+    """Coach-only: edit the AI's evaluation, add a note, and release it to the learner."""
+    base = attempt["released_evaluation"] or attempt["evaluation"]
+    key = attempt["id"]
+    released = attempt["released_at"] is not None
+    label = "Edit released feedback" if released else "Review before the learner sees it"
+    with st.expander(label, expanded=attempt["awaiting_review"]):
+        if attempt["released_evaluation"] and not released:
+            st.caption("You have an unreleased draft. The learner still sees nothing.")
+        summary = st.text_area("Summary", value=base["summary"], key=f"rev_sum_{key}")
+        rows = st.data_editor(
+            [{"Criterion": d["name"], "Score": float(d["score"]), "Feedback": d["feedback"]}
+             for d in base["dimension_scores"]],
+            hide_index=True, width="stretch", key=f"rev_dim_{key}", disabled=["Criterion"],
+            column_config={"Score": st.column_config.NumberColumn("Score / 10", min_value=0, max_value=10)},
+        )
+        strengths = st.text_area("What worked (one per line)", value="\n".join(base["strengths"]), key=f"rev_str_{key}")
+        improvements = st.text_area("What to improve (one per line)", value="\n".join(base["improvements"]), key=f"rev_imp_{key}")
+        approach = st.text_area("Suggested approach", value=base["suggested_approach"], key=f"rev_app_{key}")
+        note = st.text_area("Your note to the learner", value=attempt["coach_note"] or "", max_chars=4000,
+                            key=f"rev_note_{key}", help="Shown alongside the feedback once released.")
+        edited = {
+            "summary": summary.strip(),
+            "dimension_scores": [{"name": r["Criterion"], "score": float(r["Score"] or 0),
+                                  "feedback": (r["Feedback"] or "").strip()} for r in rows],
+            "strengths": [s.strip() for s in strengths.splitlines() if s.strip()],
+            "improvements": [s.strip() for s in improvements.splitlines() if s.strip()],
+            "suggested_approach": approach.strip(),
+            "tags": base.get("tags", []),
+        }
+        left, right = st.columns(2)
+        if left.button("Save draft", key=f"rev_draft_{key}", width="stretch"):
+            repo.save_review(principal, user_id, key, edited, note, release=False)
+            st.success("Draft saved. Not visible to the learner yet.")
+            st.rerun()
+        release_label = "Update released feedback" if released else "Save and release"
+        if right.button(release_label, key=f"rev_release_{key}", type="primary", width="stretch"):
+            repo.save_review(principal, user_id, key, edited, note, release=True)
+            st.success("Released. The learner can see this now.")
+            st.rerun()
+        if attempt["evaluation"] and attempt["released_evaluation"]:
+            with st.expander("The AI's original, for comparison"):
+                show_evaluation(attempt["evaluation"])
+
+
 def login(repo):
     st.title("Your space to grow")
     st.write("One question. A thoughtful answer. A clearer next step.")
@@ -114,6 +159,17 @@ def admin_page(repo, principal, settings):
             st.subheader(user["name"])
             st.caption(f"@{user['username']} · {user['role']} · {'Active' if user['active'] else 'Disabled'}")
             st.write(f"{user['attempt_count'] or 0} attempts · Last practice: {date_label(user['last_practice'])}")
+            if user["review_required"] and user["awaiting_count"]:
+                st.warning(f"{user['awaiting_count']} evaluation(s) awaiting your review — open the workspace and go to Progress.")
+            if user["role"] != "admin":
+                gated = st.checkbox(
+                    "I review feedback before this learner sees it", value=bool(user["review_required"]),
+                    key=f"gate_{user['id']}",
+                    help="On: evaluations stay hidden until you release them. Off: the learner sees AI feedback immediately.",
+                )
+                if gated != bool(user["review_required"]):
+                    repo.set_review_required(principal, user["id"], gated)
+                    st.rerun()
             left, right = st.columns(2)
             if left.button("Open workspace", key=f"open_{user['id']}", width="stretch"):
                 st.session_state.workspace_id = user["id"]
@@ -216,9 +272,14 @@ def practice(repo, principal, user_id, settings):
         attempt = repo.get_attempt(principal, user_id, draft["attempt_id"])
         st.markdown("**Your submitted answer**")
         st.write(attempt["answer"])
-        if attempt["status"] == "completed":
+        if attempt["status"] == "completed" and attempt["visible_evaluation"]:
             st.success("Saved to Progress")
-            show_evaluation(attempt["evaluation"])
+            if attempt["coach_note"] and attempt["released_at"]:
+                st.info(f"**A note from your coach:** {attempt['coach_note']}")
+            show_evaluation(attempt["visible_evaluation"])
+        elif attempt["awaiting_review"]:
+            st.success("Saved to Progress")
+            st.info("Your answer is in. Your coach reviews the feedback before you see it.")
         else:
             st.info("Your answer is saved in Progress. Evaluation is not complete yet.")
             if attempt["error_message"]:
@@ -286,17 +347,21 @@ def practice(repo, principal, user_id, settings):
         st.rerun()
 
 
-def progress(repo, principal, user_id, settings):
+def progress(repo, principal, user_id, settings, is_coach=False):
     st.title("Progress")
     history = repo.list_attempts(principal, user_id)
-    completed = [a for a in history if a["status"] == "completed"]
+    completed = [a for a in history if a["visible_evaluation"] is not None]
+    awaiting = [a for a in history if a["awaiting_review"]]
     columns = st.columns(3)
     columns[0].metric("Attempts", len(history))
-    columns[1].metric("Completed", len(completed))
-    columns[2].metric("Recent average", f"{sum(a['overall_score'] for a in completed[:5]) / len(completed[:5]):.1f} / 10" if completed else "—")
-    st.caption("Recent average uses up to five completed attempts. Scores may not be comparable if the rubric or goal changed.")
+    columns[1].metric("With feedback", len(completed))
+    columns[2].metric("Recent average", f"{sum(a['visible_score'] for a in completed[:5]) / len(completed[:5]):.1f} / 10" if completed else "—")
+    if awaiting:
+        st.caption(f"{len(awaiting)} awaiting the coach's review." if not is_coach
+                   else f"{len(awaiting)} awaiting your review.")
+    st.caption("Recent average uses up to five evaluations. Scores may not be comparable if the rubric or goal changed.")
     if len(completed) >= 2:
-        chart = [{"Attempt": a["id"], "Score": a["overall_score"]} for a in reversed(completed)]
+        chart = [{"Attempt": a["id"], "Score": a["visible_score"]} for a in reversed(completed)]
         st.line_chart(chart, x="Attempt", y="Score", y_label="Score / 10")
     if not history:
         st.info("Your practice history will appear here after your first submission.")
@@ -305,8 +370,9 @@ def progress(repo, principal, user_id, settings):
     if st.button("Generate and save analysis", disabled=len(completed) < 2, type="primary"):
         config = validate_config(repo.get_config(principal, user_id))
         selected = completed[:30]
+        payload = [{**a, "evaluation": a["visible_evaluation"]} for a in selected]
         with st.spinner("Reviewing your progress…"):
-            analysis = CoachAI(settings).analyze(config, selected)
+            analysis = CoachAI(settings).analyze(config, payload)
             repo.save_analysis(principal, user_id, [a["id"] for a in selected], config, analysis, settings.model)
         st.success("Analysis saved.")
     if len(completed) < 2:
@@ -327,7 +393,12 @@ def progress(repo, principal, user_id, settings):
     order = st.radio("Chronological order", ["Newest first", "Oldest first"], horizontal=True)
     display = history if order == "Newest first" else list(reversed(history))
     for attempt in display:
-        score = f"{attempt['overall_score']:.1f}/10" if attempt["status"] == "completed" else attempt["status"]
+        if attempt["visible_score"] is not None:
+            score = f"{attempt['visible_score']:.1f}/10"
+        elif attempt["awaiting_review"]:
+            score = "awaiting review"
+        else:
+            score = attempt["status"]
         with st.expander(f"{date_label(attempt['created_at'])} · #{attempt['id']} · {score}"):
             st.markdown("**Question**")
             st.write(attempt["question_text"])
@@ -336,14 +407,20 @@ def progress(repo, principal, user_id, settings):
             if attempt["raw_transcript"] is not None:
                 st.markdown("**Original transcript**")
                 st.write(attempt["raw_transcript"])
-            if attempt["status"] == "completed":
-                show_evaluation(attempt["evaluation"])
+            if attempt["visible_evaluation"]:
+                if attempt["coach_note"] and attempt["released_at"]:
+                    st.info(f"**A note from your coach:** {attempt['coach_note']}")
+                show_evaluation(attempt["visible_evaluation"])
+            elif attempt["awaiting_review"]:
+                st.info("Waiting for your coach to review this feedback.")
             else:
                 st.warning(attempt["error_message"] or "Evaluation is pending or running.")
                 if st.button("Retry evaluation", key=f"retry_{attempt['id']}"):
                     with st.spinner("Evaluating…"):
                         evaluate_attempt(repo, principal, user_id, attempt["id"], settings)
                     st.rerun()
+            if is_coach and attempt["status"] == "completed":
+                review_form(repo, principal, user_id, attempt)
             st.caption(f"Submitted by account #{attempt['created_by']} · {attempt['model']} · {attempt['prompt_version']}")
             st.markdown("**Configuration used**")
             st.json(attempt["config_snapshot"], expanded=False)
@@ -412,7 +489,7 @@ def main():
     if page == "Practice":
         practice(repo, principal, user_id, settings)
     elif page == "Progress":
-        progress(repo, principal, user_id, settings)
+        progress(repo, principal, user_id, settings, actor["role"] == "admin")
     else:
         configuration(repo, principal, user_id)
 

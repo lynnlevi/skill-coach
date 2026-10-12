@@ -7,7 +7,7 @@ from sqlalchemy import select, insert, update, func, or_, and_, text
 from sqlalchemy.exc import IntegrityError
 
 from .db import metadata, users, configs, questions, attempts, analyses, utcnow
-from .domain import DEFAULT_CONFIG, PROMPT_VERSION, MAX_ANSWER_CHARS, validate_config
+from .domain import DEFAULT_CONFIG, PROMPT_VERSION, MAX_ANSWER_CHARS, Evaluation, score_evaluation, validate_config
 from .security import (
     Principal, AccessDenied, hash_password, verify_password,
     validate_username, normalize_username, hasher,
@@ -99,8 +99,14 @@ class Repository:
             self._authorize(conn, principal, admin=True)
             activity = select(attempts.c.user_id, func.count().label("attempt_count"),
                               func.max(attempts.c.created_at).label("last_practice")).group_by(attempts.c.user_id).subquery()
-            stmt = select(users.c.id, users.c.username, users.c.name, users.c.role, users.c.active,
-                          activity.c.attempt_count, activity.c.last_practice).outerjoin(activity, users.c.id == activity.c.user_id)
+            awaiting = select(attempts.c.user_id, func.count().label("awaiting_count")).where(
+                attempts.c.status == "completed", attempts.c.released_at.is_(None),
+            ).group_by(attempts.c.user_id).subquery()
+            stmt = (select(users.c.id, users.c.username, users.c.name, users.c.role, users.c.active,
+                           users.c.review_required, activity.c.attempt_count, activity.c.last_practice,
+                           awaiting.c.awaiting_count)
+                    .outerjoin(activity, users.c.id == activity.c.user_id)
+                    .outerjoin(awaiting, users.c.id == awaiting.c.user_id))
             return [dict(r) for r in conn.execute(stmt.order_by(users.c.name)).mappings()]
 
     def create_user(self, principal, username, password, name):
@@ -163,25 +169,77 @@ class Repository:
         except IntegrityError:
             raise ValueError("That question is already in this workspace's bank.") from None
 
+    @staticmethod
+    def _present(row, review_required, is_coach):
+        """Attach what this viewer may see. The coach sees the AI original too."""
+        data = dict(row)
+        if data["released_at"] is not None:
+            data["visible_evaluation"] = data["released_evaluation"]
+            data["visible_score"] = data["released_score"]
+        elif not review_required:
+            data["visible_evaluation"] = data["evaluation"]
+            data["visible_score"] = data["overall_score"]
+        else:
+            data["visible_evaluation"] = None
+            data["visible_score"] = None
+        data["awaiting_review"] = bool(
+            review_required and data["released_at"] is None and data["status"] == "completed")
+        if not is_coach:
+            # A learner never receives unreleased feedback, not even in the page source.
+            data["evaluation"] = data["visible_evaluation"]
+            data["overall_score"] = data["visible_score"]
+            data["released_evaluation"] = None
+            data["released_score"] = None
+        return data
+
+    def set_review_required(self, principal, user_id, required):
+        with self.engine.begin() as conn:
+            self._authorize(conn, principal, user_id, admin=True)
+            conn.execute(update(users).where(users.c.id == user_id).values(review_required=bool(required)))
+
+    def save_review(self, principal, user_id, attempt_id, evaluation, note="", release=False):
+        """Store the coach's edited evaluation; release makes it visible to the learner."""
+        note = (note or "").strip()
+        if len(note) > 4000:
+            raise ValueError("Keep the note to 4,000 characters or fewer.")
+        with self.engine.begin() as conn:
+            self._authorize(conn, principal, user_id, admin=True)
+            row = conn.execute(select(attempts).where(
+                attempts.c.id == attempt_id, attempts.c.user_id == user_id)).mappings().first()
+            if not row:
+                raise AccessDenied("This attempt is unavailable.")
+            if row["status"] != "completed":
+                raise ValueError("Only a completed evaluation can be reviewed.")
+            scored = score_evaluation(Evaluation(**evaluation), row["config_snapshot"])
+            changes = {"released_evaluation": scored, "released_score": scored["overall_score"],
+                       "coach_note": note or None}
+            if release:
+                changes.update(released_at=utcnow(), released_by=principal.user_id)
+            conn.execute(update(attempts).where(attempts.c.id == attempt_id).values(**changes))
+            return scored
+
     def list_attempts(self, principal, user_id, limit=None, completed_only=False):
         with self.engine.connect() as conn:
-            self._authorize(conn, principal, user_id)
+            actor = self._authorize(conn, principal, user_id)
+            review_required = bool(conn.scalar(select(users.c.review_required).where(users.c.id == user_id)))
             stmt = select(attempts).where(attempts.c.user_id == user_id)
             if completed_only:
                 stmt = stmt.where(attempts.c.status == "completed")
             stmt = stmt.order_by(attempts.c.created_at.desc(), attempts.c.id.desc())
             if limit:
                 stmt = stmt.limit(limit)
-            return [dict(r) for r in conn.execute(stmt).mappings()]
+            is_coach = actor["role"] == "admin"
+            return [self._present(r, review_required, is_coach) for r in conn.execute(stmt).mappings()]
 
     def get_attempt(self, principal, user_id, attempt_id):
         with self.engine.connect() as conn:
-            self._authorize(conn, principal, user_id)
+            actor = self._authorize(conn, principal, user_id)
             row = conn.execute(select(attempts).where(attempts.c.id == attempt_id,
                                                       attempts.c.user_id == user_id)).mappings().first()
             if not row:
                 raise AccessDenied("This attempt is unavailable.")
-            return dict(row)
+            review_required = bool(conn.scalar(select(users.c.review_required).where(users.c.id == user_id)))
+            return self._present(row, review_required, actor["role"] == "admin")
 
     def create_attempt(self, principal, user_id, submission_id, question_id, answer,
                        config, model, raw_transcript=None, transcription_model=None):

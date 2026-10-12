@@ -7,6 +7,7 @@ import pytest
 
 from coaching.ai import CoachAI, AIError
 from coaching.db import build_engine
+from coaching.domain import DEFAULT_CONFIG
 from coaching.repository import Repository
 from conftest import PASSWORD
 
@@ -54,6 +55,63 @@ def test_empty_bank_leaves_rest_of_workspace_usable(app):
     assert repo.get_config(admin, uid)["training_goal"] == "Speak with clarity under pressure"
     at.radio(key="page").set_value("Progress").run()
     assert not at.exception
+
+
+def _gated_learner(repo, username, name):
+    admin = repo.authenticate("coach_admin", PASSWORD)
+    uid = repo.create_user(admin, username, PASSWORD, name)
+    repo.add_question(admin, uid, "Tell me about a project that did not go to plan.", "Reflection")
+    repo.set_review_required(admin, uid, True)
+    return admin, uid
+
+
+def test_gated_learner_sees_no_feedback_until_the_coach_releases(app, monkeypatch, evaluation):
+    at, repo = app
+    admin, uid = _gated_learner(repo, "gated", "Gated")
+    monkeypatch.setattr(CoachAI, "evaluate", lambda self, attempt: evaluation)
+    log_in(at, "gated")
+    next(t for t in at.text_area if t.label == "Your answer / editable transcript").set_value("My answer.").run()
+    click(at, "Submit answer")
+    assert any("coach reviews the feedback" in i.value for i in at.info)
+    assert not any(m.label == "Overall score" for m in at.metric)
+    at.radio(key="page").set_value("Progress").run()
+    assert any("Waiting for your coach" in i.value for i in at.info)
+
+    aid = repo.list_attempts(admin, uid)[0]["id"]
+    repo.save_review(admin, uid, aid, {
+        "summary": "A coach-written summary.",
+        "dimension_scores": [{"name": r["name"], "score": 7, "feedback": "Reviewed."}
+                             for r in DEFAULT_CONFIG["rubric"]],
+        "strengths": ["Clear opening"], "improvements": ["Add the outcome"],
+        "suggested_approach": "Decision, reason, evidence, outcome.", "tags": [],
+    }, "Tighten the ending next time.", release=True)
+    at.run()
+    assert any("A note from your coach" in i.value for i in at.info)
+    assert any("A coach-written summary." == m.value for m in at.markdown)
+    assert not at.exception
+
+
+def test_coach_releases_feedback_from_the_progress_page(app, monkeypatch, evaluation):
+    at, repo = app
+    admin, uid = _gated_learner(repo, "gated2", "Gated Two")
+    monkeypatch.setattr(CoachAI, "evaluate", lambda self, attempt: evaluation)
+    log_in(at, "gated2")
+    next(t for t in at.text_area if t.label == "Your answer / editable transcript").set_value("An answer.").run()
+    click(at, "Submit answer")
+    click(at, "Log out")
+
+    log_in(at)
+    at.button(key=f"open_{uid}").click().run()
+    at.radio(key="page").set_value("Progress").run()
+    assert not at.exception
+    aid = repo.list_attempts(admin, uid)[0]["id"]
+    at.text_area(key=f"rev_note_{aid}").set_value("Good start. Name the result.").run()
+    at.button(key=f"rev_release_{aid}").click().run()
+    assert not at.exception
+    released = repo.get_attempt(admin, uid, aid)
+    assert released["released_at"] is not None
+    assert released["coach_note"] == "Good start. Name the result."
+    assert released["released_score"] == evaluation["overall_score"]
 
 
 def test_admin_creates_and_opens_learner_then_typed_practice(app, monkeypatch, evaluation):

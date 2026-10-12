@@ -13,6 +13,7 @@ CREATE TABLE users (
 	session_version INTEGER NOT NULL, 
 	failed_logins INTEGER NOT NULL, 
 	locked_until FLOAT NOT NULL, 
+	review_required BOOLEAN NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL, 
 	PRIMARY KEY (id), 
 	CONSTRAINT valid_role CHECK (role IN ('admin', 'user')), 
@@ -46,6 +47,11 @@ CREATE TABLE practice_attempts (
 	config_snapshot JSON NOT NULL, 
 	evaluation JSON, 
 	overall_score FLOAT, 
+	released_evaluation JSON, 
+	released_score FLOAT, 
+	coach_note TEXT, 
+	released_at TIMESTAMP WITH TIME ZONE, 
+	released_by INTEGER, 
 	status VARCHAR(16) NOT NULL, 
 	error_message TEXT, 
 	evaluation_lease_until FLOAT NOT NULL, 
@@ -58,10 +64,12 @@ CREATE TABLE practice_attempts (
 	CONSTRAINT valid_attempt_status CHECK (status IN ('pending', 'evaluating', 'failed', 'completed')), 
 	CONSTRAINT valid_answer_source CHECK (answer_source IN ('typed', 'audio')), 
 	CONSTRAINT valid_score CHECK (overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 10)), 
+	CONSTRAINT valid_released_score CHECK (released_score IS NULL OR (released_score >= 0 AND released_score <= 10)), 
 	UNIQUE (submission_id), 
 	FOREIGN KEY(user_id) REFERENCES users (id), 
 	FOREIGN KEY(created_by) REFERENCES users (id), 
-	FOREIGN KEY(question_id) REFERENCES questions (id)
+	FOREIGN KEY(question_id) REFERENCES questions (id), 
+	FOREIGN KEY(released_by) REFERENCES users (id)
 );
 
 CREATE INDEX ix_attempts_user_time ON practice_attempts (user_id, created_at);
