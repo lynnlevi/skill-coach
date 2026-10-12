@@ -290,7 +290,6 @@ def practice(repo, principal, user_id, settings):
                 st.rerun()
     else:
         st.write("Type your answer, or record it and review the transcript before submitting.")
-        st.caption("Transcription sends your recording to OpenAI. Submission sends the final text and coaching profile. Audio is not stored in the app's database.")
         mode = st.radio("Answer using", ["Type", "Record"], horizontal=True, key=f"mode_{draft['submission_id']}")
         answer_key = f"answer_{draft['submission_id']}"
         if mode == "Record":
