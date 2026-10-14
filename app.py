@@ -288,8 +288,8 @@ def answer_input(repo, principal, user_id, settings, draft):
 
 def practice(repo, principal, user_id, settings):
     st.title("Practice")
-    config = repo.get_config(principal, user_id)
-    bank = repo.list_questions(principal, user_id)
+    context = repo.practice_context(principal, user_id)
+    config, bank = context["config"], context["bank"]
     if not bank:
         # Only this page has nothing to show; the rest of the workspace stays usable.
         st.caption(f"Training goal: {config['training_goal']}")
@@ -302,7 +302,7 @@ def practice(repo, principal, user_id, settings):
                 st.write("Your coach hasn't added any questions yet. Ask them to add the first one.")
         st.caption("Progress and Configuration are available in the sidebar.")
         return
-    history = repo.list_attempts(principal, user_id, limit=10)
+    history = context["history"]
     if "draft" not in st.session_state:
         recent_ids = {a["question_id"] for a in history}
         question = next((q for q in bank if q["id"] not in recent_ids), bank[0])
@@ -497,9 +497,10 @@ def main():
     if actor["role"] == "admin" and st.session_state.get("admin_page", True):
         admin_page(repo, principal, settings)
         return
-    user_id = st.session_state.get("workspace_id", actor["id"]) if actor["role"] == "admin" else actor["id"]
-    workspace = repo.workspace_user(principal, user_id)
-    if actor["role"] == "admin":
+    is_coach = actor["role"] == "admin"
+    user_id = st.session_state.get("workspace_id", actor["id"]) if is_coach else actor["id"]
+    workspace = repo.workspace_user(principal, user_id) if user_id != actor["id"] else actor
+    if is_coach:
         st.info(f"Coach view · {workspace['name']} (@{workspace['username']}). Changes and practice submissions will be saved in this workspace under your account ID.")
     if not workspace["active"]:
         st.warning("This learner's login is disabled. Their saved workspace remains available to you.")
@@ -507,7 +508,7 @@ def main():
     if page == "Practice":
         practice(repo, principal, user_id, settings)
     elif page == "Progress":
-        progress(repo, principal, user_id, settings, actor["role"] == "admin")
+        progress(repo, principal, user_id, settings, is_coach)
     else:
         configuration(repo, principal, user_id)
 

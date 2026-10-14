@@ -224,6 +224,22 @@ class Repository:
             conn.execute(update(attempts).where(attempts.c.id == attempt_id).values(**changes))
             return scored
 
+    def practice_context(self, principal, user_id, history_limit=10):
+        """Everything the Practice page needs, on one connection and one authorization."""
+        with self.engine.connect() as conn:
+            actor = self._authorize(conn, principal, user_id)
+            review_required = self._review_required(conn, user_id, actor)
+            config = dict(conn.execute(select(configs).where(configs.c.user_id == user_id)).mappings().one())
+            bank = [dict(r) for r in conn.execute(select(questions).where(
+                questions.c.user_id == user_id, questions.c.active.is_(True),
+            ).order_by(questions.c.id)).mappings()]
+            rows = conn.execute(select(attempts).where(attempts.c.user_id == user_id)
+                                .order_by(attempts.c.created_at.desc(), attempts.c.id.desc())
+                                .limit(history_limit)).mappings()
+            is_coach = actor["role"] == "admin"
+            history = [self._present(r, review_required, is_coach) for r in rows]
+            return {"config": config, "bank": bank, "history": history}
+
     def list_attempts(self, principal, user_id, limit=None):
         with self.engine.connect() as conn:
             actor = self._authorize(conn, principal, user_id)
