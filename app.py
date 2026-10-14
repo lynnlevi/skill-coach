@@ -293,8 +293,15 @@ def practice(repo, principal, user_id, settings):
         mode = st.radio("Answer using", ["Type", "Record"], horizontal=True, key=f"mode_{draft['submission_id']}")
         answer_key = f"answer_{draft['submission_id']}"
         if mode == "Record":
-            audio = st.audio_input("Record your answer", sample_rate=16000, key=f"audio_{draft['submission_id']}")
-            if st.button("Transcribe recording", disabled=audio is None):
+            # A fresh take needs a fresh widget, so the take number is part of the key.
+            take_key = f"take_{draft['submission_id']}"
+            if take_key not in st.session_state:
+                st.session_state[take_key] = 0
+            take = st.session_state[take_key]
+            audio = st.audio_input("Record your answer", sample_rate=16000,
+                                   key=f"audio_{draft['submission_id']}_{take}")
+            transcribe, again = st.columns(2)
+            if transcribe.button("Transcribe recording", disabled=audio is None, width="stretch"):
                 if audio.size > MAX_AUDIO_BYTES:
                     raise AIError("Please record a shorter answer (under 24 MB).")
                 repo.workspace_user(principal, user_id)
@@ -308,6 +315,13 @@ def practice(repo, principal, user_id, settings):
                     draft.update(answer=transcript, raw_transcript=transcript, audio_hash=digest,
                                  transcription_model=settings.transcription_model)
                     st.session_state[answer_key] = transcript
+            if again.button("Record again", disabled=audio is None, width="stretch",
+                            help="Discard this take and record a new one. The text below is kept "
+                                 "until you transcribe the new recording."):
+                st.session_state[take_key] = take + 1
+                st.rerun()
+            if take:
+                st.caption(f"Take {take + 1}.")
             st.caption("A new transcription replaces the answer below. Recording alone does not submit anything.")
         if answer_key not in st.session_state:
             st.session_state[answer_key] = draft["answer"]

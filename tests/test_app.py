@@ -262,6 +262,27 @@ def test_transcript_review_is_separate_and_final_edit_is_saved(app, monkeypatch,
     assert saved["raw_transcript"] == "Original recognized answer"
 
 
+def test_learner_can_discard_a_take_and_record_again(app, monkeypatch):
+    at, repo = app
+    admin = repo.authenticate("coach_admin", PASSWORD)
+    uid = repo.create_user(admin, "retaker", PASSWORD, "Retaker")
+    repo.add_question(admin, uid, "Tell me about a project that did not go to plan.", "Reflection")
+    audio = io.BytesIO(b"RIFF-first-take")
+    audio.size = len(audio.getvalue())
+    monkeypatch.setattr(st, "audio_input", lambda *args, **kwargs: audio)
+    monkeypatch.setattr(CoachAI, "transcribe", lambda self, data: "First take transcript")
+    log_in(at, "retaker")
+    next(r for r in at.radio if r.label == "Answer using").set_value("Record").run()
+    click(at, "Transcribe recording")
+    assert next(t for t in at.text_area if t.label == "Your answer / editable transcript").value == "First take transcript"
+
+    click(at, "Record again")
+    assert any("Take 2." in c.value for c in at.caption)
+    # The text stays put until a new take is transcribed, and nothing was submitted.
+    assert next(t for t in at.text_area if t.label == "Your answer / editable transcript").value == "First take transcript"
+    assert repo.list_attempts(admin, uid) == []
+
+
 def test_progress_chart_and_analysis_are_saved_once_per_click(app, monkeypatch, evaluation):
     at, repo = app
     admin = repo.authenticate("coach_admin", PASSWORD)
