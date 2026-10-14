@@ -170,6 +170,10 @@ class Repository:
             raise ValueError("That question is already in this workspace's bank.") from None
 
     @staticmethod
+    def _review_required(conn, user_id):
+        return bool(conn.scalar(select(users.c.review_required).where(users.c.id == user_id)))
+
+    @staticmethod
     def _present(row, review_required, is_coach):
         """Attach what this viewer may see. The coach sees the AI original too."""
         data = dict(row)
@@ -218,13 +222,11 @@ class Repository:
             conn.execute(update(attempts).where(attempts.c.id == attempt_id).values(**changes))
             return scored
 
-    def list_attempts(self, principal, user_id, limit=None, completed_only=False):
+    def list_attempts(self, principal, user_id, limit=None):
         with self.engine.connect() as conn:
             actor = self._authorize(conn, principal, user_id)
-            review_required = bool(conn.scalar(select(users.c.review_required).where(users.c.id == user_id)))
+            review_required = self._review_required(conn, user_id)
             stmt = select(attempts).where(attempts.c.user_id == user_id)
-            if completed_only:
-                stmt = stmt.where(attempts.c.status == "completed")
             stmt = stmt.order_by(attempts.c.created_at.desc(), attempts.c.id.desc())
             if limit:
                 stmt = stmt.limit(limit)
@@ -238,8 +240,7 @@ class Repository:
                                                       attempts.c.user_id == user_id)).mappings().first()
             if not row:
                 raise AccessDenied("This attempt is unavailable.")
-            review_required = bool(conn.scalar(select(users.c.review_required).where(users.c.id == user_id)))
-            return self._present(row, review_required, actor["role"] == "admin")
+            return self._present(row, self._review_required(conn, user_id), actor["role"] == "admin")
 
     def create_attempt(self, principal, user_id, submission_id, question_id, answer,
                        config, model, raw_transcript=None, transcription_model=None):

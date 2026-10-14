@@ -20,19 +20,6 @@ DEFAULT_CONFIG = {
     "coaching_instructions": "Be supportive and specific. Prefer a direct answer, reasoning, evidence, then outcome.",
 }
 
-QUESTION_BANK = [
-    ("Explain a difficult decision you made. What did you choose, why, and what happened?", "Decision making"),
-    ("Tell me about a time you disagreed with a colleague. How did you move forward?", "Collaboration"),
-    ("Describe a project that did not go to plan. What did you learn and change?", "Reflection"),
-    ("How would you explain a complex idea from your work to someone unfamiliar with it?", "Communication"),
-    ("Tell me about an achievement you are proud of. What was your specific contribution?", "Evidence"),
-    ("When several priorities compete for your time, how do you decide what to do first?", "Prioritization"),
-    ("Describe a time you received difficult feedback. What did you do with it?", "Growth"),
-    ("How would you persuade a stakeholder who disagrees with your recommendation?", "Influence"),
-    ("How would you prioritize a product roadmap when stakeholders disagree?", "Product management"),
-    ("Tell me about a product you launched. How did you measure its success?", "Product management"),
-]
-
 
 def validate_config(config: dict) -> dict:
     clean = {}
@@ -84,11 +71,6 @@ class Evaluation(StrictModel):
     improvements: list[str]
     suggested_approach: str
     tags: list[str]
-
-
-class QuestionChoice(StrictModel):
-    question_id: int
-    reason: str
 
 
 class GeneratedQuestion(StrictModel):

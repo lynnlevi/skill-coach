@@ -31,6 +31,16 @@ def initialize(_repo, _settings, database_url):
     return True
 
 
+def flash(message):
+    """Queue a confirmation that survives the st.rerun() which follows it."""
+    st.session_state.setdefault("flash", []).append(message)
+
+
+def show_flash():
+    for message in st.session_state.pop("flash", []):
+        st.success(message)
+
+
 def clear_workspace():
     for key in list(st.session_state):
         if key not in {"principal", "login_time", "workspace_id", "admin_page"}:
@@ -103,12 +113,12 @@ def review_form(repo, principal, user_id, attempt):
         left, right = st.columns(2)
         if left.button("Save draft", key=f"rev_draft_{key}", width="stretch"):
             repo.save_review(principal, user_id, key, edited, note, release=False)
-            st.success("Draft saved. Not visible to the learner yet.")
+            flash("Draft saved. Not visible to the learner yet.")
             st.rerun()
         release_label = "Update released feedback" if released else "Save and release"
         if right.button(release_label, key=f"rev_release_{key}", type="primary", width="stretch"):
             repo.save_review(principal, user_id, key, edited, note, release=True)
-            st.success("Released. The learner can see this now.")
+            flash("Released. The learner can see this now.")
             st.rerun()
         if attempt["evaluation"] and attempt["released_evaluation"]:
             with st.expander("The AI's original, for comparison"):
@@ -140,6 +150,47 @@ def login(repo):
             st.error("Unable to log in. Check your credentials or contact your coach. After five failed attempts, wait 15 minutes.")
     st.caption("Accounts are created by your coach. Contact them for access or a password reset.")
     st.stop()
+
+
+def question_tools(repo, principal, settings, user):
+    """Coach-only: add a question to one learner's bank, by hand or drafted by AI."""
+    uid, name = user["id"], user["name"]
+    with st.expander("Add a practice question"):
+        st.caption(f"Added only to {name}'s own bank.")
+        write_tab, ai_tab = st.tabs(["Write it yourself", "Generate with AI"])
+        with write_tab:
+            with st.form(f"add_question_{uid}", clear_on_submit=True):
+                question = st.text_area("Question", max_chars=2000, key=f"question_{uid}")
+                category = st.text_input("Category", max_chars=100, key=f"category_{uid}")
+                if st.form_submit_button("Add question"):
+                    repo.add_question(principal, uid, question, category)
+                    st.success(f"Question added to {name}'s bank.")
+        with ai_tab:
+            draft_key = f"question_draft_{uid}"
+            with st.form(f"generate_question_{uid}"):
+                prompt = st.text_area(
+                    "What kind of question do you want?", max_chars=2000, key=f"gen_prompt_{uid}",
+                    help="Describe the scenario or pattern you want this question to test for.",
+                )
+                if st.form_submit_button("Generate with AI", key=f"generate_submit_{uid}") and prompt.strip():
+                    config = validate_config(repo.get_config(principal, uid))
+                    bank = repo.list_questions(principal, uid)
+                    with st.spinner("Drafting a question…"):
+                        st.session_state[draft_key] = CoachAI(settings).generate_question(config, prompt, bank)
+            draft = st.session_state.get(draft_key)
+            if draft:
+                st.caption(draft["category"])
+                st.write(draft["text"])
+                st.caption(draft["rationale"])
+                accept, discard = st.columns(2)
+                if accept.button("Add to bank", key=f"accept_{uid}", type="primary", width="stretch"):
+                    repo.add_question(principal, uid, draft["text"], draft["category"])
+                    del st.session_state[draft_key]
+                    flash(f"Question added to {name}'s bank.")
+                    st.rerun()
+                if discard.button("Discard", key=f"discard_{uid}", width="stretch"):
+                    del st.session_state[draft_key]
+                    st.rerun()
 
 
 def admin_page(repo, principal, settings):
@@ -188,52 +239,51 @@ def admin_page(repo, principal, settings):
                         if user["id"] == principal.user_id:
                             logout()
                         st.success("Password changed. Existing sessions have been revoked.")
-            with st.expander("Add a practice question"):
-                st.caption(f"Added only to {user['name']}'s own bank.")
-                write_tab, ai_tab = st.tabs(["Write it yourself", "Generate with AI"])
-                with write_tab:
-                    with st.form(f"add_question_{user['id']}", clear_on_submit=True):
-                        question = st.text_area("Question", max_chars=2000, key=f"question_{user['id']}")
-                        category = st.text_input("Category", max_chars=100, key=f"category_{user['id']}")
-                        if st.form_submit_button("Add question"):
-                            repo.add_question(principal, user["id"], question, category)
-                            st.success(f"Question added to {user['name']}'s bank.")
-                with ai_tab:
-                    draft_key = f"question_draft_{user['id']}"
-                    with st.form(f"generate_question_{user['id']}"):
-                        prompt = st.text_area(
-                            "What kind of question do you want?", max_chars=2000, key=f"gen_prompt_{user['id']}",
-                            help="Describe the scenario or pattern you want this question to test for.",
-                        )
-                        if st.form_submit_button("Generate with AI", key=f"generate_submit_{user['id']}") and prompt.strip():
-                            config = validate_config(repo.get_config(principal, user["id"]))
-                            bank = repo.list_questions(principal, user["id"])
-                            with st.spinner("Drafting a question…"):
-                                st.session_state[draft_key] = CoachAI(settings).generate_question(config, prompt, bank)
-                    draft = st.session_state.get(draft_key)
-                    if draft:
-                        st.caption(draft["category"])
-                        st.write(draft["text"])
-                        st.caption(draft["rationale"])
-                        accept, discard = st.columns(2)
-                        if accept.button("Add to bank", key=f"accept_{user['id']}", type="primary", width="stretch"):
-                            repo.add_question(principal, user["id"], draft["text"], draft["category"])
-                            del st.session_state[draft_key]
-                            st.success(f"Question added to {user['name']}'s bank.")
-                            st.rerun()
-                        if discard.button("Discard", key=f"discard_{user['id']}", width="stretch"):
-                            del st.session_state[draft_key]
-                            st.rerun()
+            question_tools(repo, principal, settings, user)
 
 
-def new_draft(question, config, reason=""):
+def new_draft(question, config):
     return {"submission_id": str(uuid4()), "question": question, "config": validate_config(config),
             "answer": "", "raw_transcript": None, "audio_hash": None,
-            "transcription_model": None, "attempt_id": None, "reason": reason}
+            "transcription_model": None, "attempt_id": None}
 
 
 def remember_answer(key):
     st.session_state.draft["answer"] = st.session_state[key]
+
+
+def record_tab(repo, principal, user_id, settings, draft, answer_key):
+    """The Record mode. The widget's own mic button replaces the take in place."""
+    audio = st.audio_input("Record your answer", sample_rate=16000, key=f"audio_{draft['submission_id']}")
+    if st.button("Transcribe recording", disabled=audio is None):
+        if audio.size > MAX_AUDIO_BYTES:
+            raise AIError("Please record a shorter answer (under 24 MB).")
+        repo.workspace_user(principal, user_id)
+        content = audio.getvalue()
+        digest = hashlib.sha256(content).hexdigest()
+        if digest == draft["audio_hash"]:
+            st.info("This recording is already transcribed. Your edits are preserved below.")
+        else:
+            with st.spinner("Transcribing…"):
+                transcript = CoachAI(settings).transcribe(content)
+            draft.update(answer=transcript, raw_transcript=transcript, audio_hash=digest,
+                         transcription_model=settings.transcription_model)
+            st.session_state[answer_key] = transcript
+
+
+def answer_input(repo, principal, user_id, settings, draft):
+    """Type or record an answer. Writes the result back onto the draft."""
+    st.write("Type your answer, or record it and review the transcript before submitting.")
+    mode = st.radio("Answer using", ["Type", "Record"], horizontal=True, key=f"mode_{draft['submission_id']}")
+    answer_key = f"answer_{draft['submission_id']}"
+    if mode == "Record":
+        record_tab(repo, principal, user_id, settings, draft, answer_key)
+    if answer_key not in st.session_state:
+        st.session_state[answer_key] = draft["answer"]
+    st.text_area("Your answer / editable transcript", key=answer_key, height=230,
+                 on_change=remember_answer, args=(answer_key,),
+                 help=f"Review and edit before submitting. Maximum {MAX_ANSWER_CHARS:,} characters.")
+    draft["answer"] = st.session_state[answer_key]
 
 
 def practice(repo, principal, user_id, settings):
@@ -264,8 +314,17 @@ def practice(repo, principal, user_id, settings):
     with st.container(border=True):
         st.caption(draft["question"]["category"])
         st.subheader(draft["question"]["text"])
-        if draft["reason"]:
-            st.caption(draft["reason"])
+        has_unsaved_answer = bool(draft["answer"].strip()) and not draft["attempt_id"]
+        if has_unsaved_answer:
+            allow_replace = st.checkbox("Discard this draft when changing questions",
+                                        key=f"discard_{draft['submission_id']}")
+        else:
+            allow_replace = True
+        if st.button("Change question", disabled=not allow_replace,
+                     help="Move to the next question in your bank."):
+            index = next((i for i, q in enumerate(bank) if q["id"] == draft["question"]["id"]), -1)
+            st.session_state.draft = new_draft(bank[(index + 1) % len(bank)], config)
+            st.rerun()
     with st.expander("Rubric for this question"):
         st.dataframe(draft["config"]["rubric"], hide_index=True, width="stretch")
     if draft["attempt_id"]:
@@ -289,46 +348,7 @@ def practice(repo, principal, user_id, settings):
                     evaluate_attempt(repo, principal, user_id, attempt["id"], settings)
                 st.rerun()
     else:
-        st.write("Type your answer, or record it and review the transcript before submitting.")
-        mode = st.radio("Answer using", ["Type", "Record"], horizontal=True, key=f"mode_{draft['submission_id']}")
-        answer_key = f"answer_{draft['submission_id']}"
-        if mode == "Record":
-            # A fresh take needs a fresh widget, so the take number is part of the key.
-            take_key = f"take_{draft['submission_id']}"
-            if take_key not in st.session_state:
-                st.session_state[take_key] = 0
-            take = st.session_state[take_key]
-            audio = st.audio_input("Record your answer", sample_rate=16000,
-                                   key=f"audio_{draft['submission_id']}_{take}")
-            transcribe, again = st.columns(2)
-            if transcribe.button("Transcribe recording", disabled=audio is None, width="stretch"):
-                if audio.size > MAX_AUDIO_BYTES:
-                    raise AIError("Please record a shorter answer (under 24 MB).")
-                repo.workspace_user(principal, user_id)
-                content = audio.getvalue()
-                digest = hashlib.sha256(content).hexdigest()
-                if digest == draft["audio_hash"]:
-                    st.info("This recording is already transcribed. Your edits are preserved below.")
-                else:
-                    with st.spinner("Transcribing…"):
-                        transcript = CoachAI(settings).transcribe(content)
-                    draft.update(answer=transcript, raw_transcript=transcript, audio_hash=digest,
-                                 transcription_model=settings.transcription_model)
-                    st.session_state[answer_key] = transcript
-            if again.button("Record again", disabled=audio is None, width="stretch",
-                            help="Discard this take and record a new one. The text below is kept "
-                                 "until you transcribe the new recording."):
-                st.session_state[take_key] = take + 1
-                st.rerun()
-            if take:
-                st.caption(f"Take {take + 1}.")
-            st.caption("A new transcription replaces the answer below. Recording alone does not submit anything.")
-        if answer_key not in st.session_state:
-            st.session_state[answer_key] = draft["answer"]
-        st.text_area("Your answer / editable transcript", key=answer_key, height=230,
-                     on_change=remember_answer, args=(answer_key,),
-                     help=f"Review and edit before submitting. Maximum {MAX_ANSWER_CHARS:,} characters.")
-        draft["answer"] = st.session_state[answer_key]
+        answer_input(repo, principal, user_id, settings, draft)
         if st.button("Submit answer", type="primary", disabled=not draft["answer"].strip()):
             # Commit the official answer before making the potentially slow API request.
             draft["attempt_id"] = repo.create_attempt(
@@ -342,22 +362,6 @@ def practice(repo, principal, user_id, settings):
                 # Render the saved attempt and its safe error message immediately.
                 st.rerun()
             st.rerun()
-    st.divider()
-    left, right = st.columns(2)
-    has_unsaved_answer = bool(draft["answer"].strip()) and not draft["attempt_id"]
-    if has_unsaved_answer:
-        allow_replace = st.checkbox("Discard this draft when changing questions", key=f"discard_{draft['submission_id']}")
-    else:
-        allow_replace = True
-    if left.button("Next question", disabled=not allow_replace, width="stretch"):
-        index = next((i for i, q in enumerate(bank) if q["id"] == draft["question"]["id"]), -1)
-        st.session_state.draft = new_draft(bank[(index + 1) % len(bank)], config)
-        st.rerun()
-    if right.button("Choose with AI", disabled=not allow_replace, width="stretch"):
-        with st.spinner("Choosing a question for your goals…"):
-            question, reason = CoachAI(settings).choose_question(validate_config(config), bank, history)
-        st.session_state.draft = new_draft(question, config, reason)
-        st.rerun()
 
 
 def progress(repo, principal, user_id, settings, is_coach=False):
@@ -489,6 +493,7 @@ def main():
                 st.session_state.admin_page = True
                 clear_workspace()
                 st.rerun()
+    show_flash()
     if actor["role"] == "admin" and st.session_state.get("admin_page", True):
         admin_page(repo, principal, settings)
         return

@@ -5,7 +5,7 @@ import json
 from openai import OpenAI, APIConnectionError, APITimeoutError, RateLimitError, AuthenticationError, APIStatusError
 from pydantic import ValidationError
 
-from .domain import Evaluation, QuestionChoice, GeneratedQuestion, TrendAnalysis, score_evaluation, MAX_AUDIO_BYTES
+from .domain import Evaluation, GeneratedQuestion, TrendAnalysis, score_evaluation, MAX_AUDIO_BYTES
 
 
 class AIError(Exception):
@@ -49,19 +49,6 @@ class CoachAI:
         if response.status != "completed" or response.output_parsed is None:
             raise AIError("The model declined the request or returned an incomplete response. Please retry or revise the input.")
         return response.output_parsed
-
-    def choose_question(self, config, bank, history):
-        choice = self._structured(QuestionChoice,
-            "Select exactly one question ID from the provided bank that fits the training goal, context, "
-            "rubric, and recent weaknesses. Avoid recent repeats when possible. Briefly explain the choice.",
-            {"profile": config, "question_bank": bank, "recent_attempts": [
-                {"question": a["question_text"], "evaluation": a["evaluation"]} for a in history[:10]
-            ]},
-        )
-        selected = next((q for q in bank if q["id"] == choice.question_id), None)
-        if not selected:
-            raise AIError("The model selected a question outside the bank. Please retry.")
-        return selected, choice.reason
 
     def generate_question(self, config, prompt, existing_bank=None):
         prompt = prompt.strip()

@@ -262,24 +262,32 @@ def test_transcript_review_is_separate_and_final_edit_is_saved(app, monkeypatch,
     assert saved["raw_transcript"] == "Original recognized answer"
 
 
-def test_learner_can_discard_a_take_and_record_again(app, monkeypatch):
+def test_a_new_recording_replaces_the_previous_transcript(app, monkeypatch):
     at, repo = app
     admin = repo.authenticate("coach_admin", PASSWORD)
     uid = repo.create_user(admin, "retaker", PASSWORD, "Retaker")
     repo.add_question(admin, uid, "Tell me about a project that did not go to plan.", "Reflection")
-    audio = io.BytesIO(b"RIFF-first-take")
-    audio.size = len(audio.getvalue())
-    monkeypatch.setattr(st, "audio_input", lambda *args, **kwargs: audio)
-    monkeypatch.setattr(CoachAI, "transcribe", lambda self, data: "First take transcript")
+    takes = {"current": b"RIFF-first-take"}
+
+    def audio_input(*args, **kwargs):
+        # The widget's mic button swaps the recording in place; this mimics that.
+        data = io.BytesIO(takes["current"])
+        data.size = len(takes["current"])
+        return data
+
+    monkeypatch.setattr(st, "audio_input", audio_input)
+    monkeypatch.setattr(CoachAI, "transcribe",
+                        lambda self, content: "First take" if content == b"RIFF-first-take" else "Second take")
     log_in(at, "retaker")
     next(r for r in at.radio if r.label == "Answer using").set_value("Record").run()
     click(at, "Transcribe recording")
-    assert next(t for t in at.text_area if t.label == "Your answer / editable transcript").value == "First take transcript"
+    assert next(t for t in at.text_area if t.label == "Your answer / editable transcript").value == "First take"
 
-    click(at, "Record again")
-    assert any("Take 2." in c.value for c in at.caption)
-    # The text stays put until a new take is transcribed, and nothing was submitted.
-    assert next(t for t in at.text_area if t.label == "Your answer / editable transcript").value == "First take transcript"
+    takes["current"] = b"RIFF-second-take"
+    at.run()
+    click(at, "Transcribe recording")
+    assert next(t for t in at.text_area if t.label == "Your answer / editable transcript").value == "Second take"
+    assert not any(b.label == "Record again" for b in at.button)
     assert repo.list_attempts(admin, uid) == []
 
 
@@ -298,7 +306,7 @@ def test_progress_chart_and_analysis_are_saved_once_per_click(app, monkeypatch, 
     for i in range(2):
         next(t for t in at.text_area if t.label == "Your answer / editable transcript").set_value(f"Answer {i} with a clear decision.").run()
         click(at, "Submit answer")
-        click(at, "Next question")
+        click(at, "Change question")
     at.radio(key="page").set_value("Progress").run()
     assert not at.exception
     click(at, "Generate and save analysis")
