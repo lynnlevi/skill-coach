@@ -52,7 +52,7 @@ class Repository:
         if user_id is not None:
             if actor["role"] != "admin" and actor["id"] != user_id:
                 raise AccessDenied("You cannot open this workspace.")
-            if not conn.scalar(select(users.c.id).where(users.c.id == user_id)):
+            if user_id != actor["id"] and not conn.scalar(select(users.c.id).where(users.c.id == user_id)):
                 raise AccessDenied("This workspace is unavailable.")
         return actor
 
@@ -170,7 +170,9 @@ class Repository:
             raise ValueError("That question is already in this workspace's bank.") from None
 
     @staticmethod
-    def _review_required(conn, user_id):
+    def _review_required(conn, user_id, actor=None):
+        if actor is not None and actor["id"] == user_id:
+            return bool(actor["review_required"])
         return bool(conn.scalar(select(users.c.review_required).where(users.c.id == user_id)))
 
     @staticmethod
@@ -225,7 +227,7 @@ class Repository:
     def list_attempts(self, principal, user_id, limit=None):
         with self.engine.connect() as conn:
             actor = self._authorize(conn, principal, user_id)
-            review_required = self._review_required(conn, user_id)
+            review_required = self._review_required(conn, user_id, actor)
             stmt = select(attempts).where(attempts.c.user_id == user_id)
             stmt = stmt.order_by(attempts.c.created_at.desc(), attempts.c.id.desc())
             if limit:
@@ -240,7 +242,7 @@ class Repository:
                                                       attempts.c.user_id == user_id)).mappings().first()
             if not row:
                 raise AccessDenied("This attempt is unavailable.")
-            return self._present(row, self._review_required(conn, user_id), actor["role"] == "admin")
+            return self._present(row, self._review_required(conn, user_id, actor), actor["role"] == "admin")
 
     def create_attempt(self, principal, user_id, submission_id, question_id, answer,
                        config, model, raw_transcript=None, transcription_model=None):
